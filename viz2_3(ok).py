@@ -1,41 +1,4 @@
-#!/usr/bin/env python3
-"""
-ViZDoom LiDAR-DFS Explorer — Level 2  (v8-tuned)
-==================================================
 
-Key fixes over v7
------------------
-1. THRESHOLD SEPARATION — DEPTH_DROP_THRESH (20) is now well below
-   MIN_DEPTH_TO_EXPLORE (35).  In v7 they were both 45, so the drive
-   stopped when forward depth dropped below 45, and the subsequent scan
-   saw ~42 wu forward — still below the candidate threshold → instant
-   dead-end even when a real path existed.
-
-2. ONLY MARK EXACT HEADING AS TRIED — v7 marked ±10° around the chosen
-   heading, which silently blocked adjacent valid directions.  Now only
-   the exact chosen heading (and its direct reverse ±180°) is marked tried
-   when the drive succeeds.  On wall/short failure only the exact heading
-   is marked.
-
-3. SIDE OPENING — tighter threshold: side must be > SIDE_OPEN_DEPTH (150)
-   AND > fwd_depth * SIDE_RATIO (2.0).  This prevents plain corridor walls
-   from being flagged as side openings.
-
-4. CHECKPOINT INTERVAL — raised to 350 wu (was 100).  Avoids planting
-   junk checkpoints every few steps in long corridors.
-
-5. MIN_NODE_SEPARATION — raised to 250 wu.  Nodes are only planted at
-   genuine junctions / side openings, not mid-corridor.
-
-6. REVISIT_RADIUS — raised to 130 wu.  Prevents the loop guard from
-   being bypassed by nodes that are nearly co-located.
-
-Sensors used (Level 2 compliant)
----------------------------------
-  depth_buffer  — LiDAR rays, forward depth, peripheral side depth (no turning)
-  POSITION_X / POSITION_Y / ANGLE  — odometry
-  objects_info  — goal detection only
-"""
 
 import os, sys, math, time, heapq
 from dataclasses import dataclass, field
@@ -140,9 +103,6 @@ LEFT  = [0, 0, 1, 0]
 RIGHT = [0, 0, 0, 1]
 
 
-# ====================================================================
-#  DATA STRUCTURES
-# ====================================================================
 
 _node_id_counter = 0
 
@@ -177,9 +137,7 @@ def new_node(x, y, lidar, parent_node=None, scanned=True):
     )
 
 
-# ====================================================================
-#  DEPTH READING
-# ====================================================================
+
 
 def read_center_depth(depth_buffer):
     """Min depth in a narrow center column band = forward-pointing LiDAR ray."""
@@ -194,11 +152,7 @@ def read_center_depth(depth_buffer):
 
 
 def read_side_depths(depth_buffer):
-    """
-    Read left and right peripheral depths WITHOUT turning.
-    Uses the outermost SIDE_BUFFER_FRAC of screen columns.
-    Returns (left_depth, right_depth) as 60th-percentile (noise-robust).
-    """
+    
     if depth_buffer is None:
         return 0.0, 0.0
     H, W   = depth_buffer.shape
@@ -209,9 +163,6 @@ def read_side_depths(depth_buffer):
     return min(left_d, LIDAR_DEPTH_MAX), min(right_d, LIDAR_DEPTH_MAX)
 
 
-# ====================================================================
-#  LIDAR SCAN — full 360° polar depth map
-# ====================================================================
 
 def lidar_scan(game):
     """
@@ -251,9 +202,7 @@ def print_lidar(polar):
     print(f"    LiDAR top-5: {', '.join(parts)}")
 
 
-# ====================================================================
-#  TURN CONTROLLER
-# ====================================================================
+
 
 def turn_to(game, target_deg, max_steps=120):
     for _ in range(max_steps):
@@ -268,9 +217,6 @@ def turn_to(game, target_deg, max_steps=120):
     return False
 
 
-# ====================================================================
-#  WALL PROBE
-# ====================================================================
 
 def probe_wall(game, heading_deg):
     """
@@ -290,9 +236,7 @@ def probe_wall(game, heading_deg):
     return disp < WALL_DELTA_WU, disp
 
 
-# ====================================================================
-#  NAVIGATE TO WORLD POSITION
-# ====================================================================
+
 
 def navigate_to(game, tx, ty, max_steps=500):
     for _ in range(max_steps):
@@ -319,11 +263,7 @@ def navigate_to(game, tx, ty, max_steps=500):
 
 
 def fast_navigate_to(game, tx, ty, max_steps=800):
-    """
-    Same as navigate_to but sends 4 forward tics per action.
-    Used for backtracking over already-known safe corridors so the agent
-    doesn't waste 13+ minutes crawling back to the parent node.
-    """
+  
     FWD_FAST_TICKS = 4
     for _ in range(max_steps):
         r = get_pose(game)
@@ -348,9 +288,7 @@ def fast_navigate_to(game, tx, ty, max_steps=800):
     return r is not None and dist2(r[0], r[1], tx, ty) < NODE_ARRIVE_WU * 2
 
 
-# ====================================================================
-#  A* ON NODE GRAPH  (backtracking)
-# ====================================================================
+
 
 def astar_nodes(all_nodes, start_nid, goal_nid):
     """
@@ -404,30 +342,9 @@ def astar_nodes(all_nodes, start_nid, goal_nid):
     return []
 
 
-# ====================================================================
-#  FORWARD DRIVE — side-opening checkpoints + room-center stop
-# ====================================================================
 
 def drive_to_max(game, heading_deg, all_nodes, max_ticks=8000):
-    """
-    Drive along heading_deg until one of four stop conditions:
-
-      'ROOM_CENTER'  — BOTH side depths > ROOM_SIDE_THRESH (open room detected).
-                       Stop here and scan: best position to see all room exits.
-      'JUNCTION'     — Forward depth < DEPTH_DROP_THRESH for JUNCTION_CONFIRM ticks.
-      'WALL'         — Position delta < threshold (physically stopped by wall).
-      'END'          — max_ticks exhausted.
-
-    While driving, side depths are sampled every CHECKPOINT_INTERVAL_WU.
-    If either side > SIDE_OPEN_DEPTH a side-corridor checkpoint is recorded at
-    that position — DFS will navigate back and scan it later.
-
-    The room-center check also guards against planting duplicate nodes: if an
-    existing node already sits near the detected room center, the drive continues
-    to the next stop condition instead of terminating prematurely.
-
-    Returns: (side_stops, final_pos, reason, travelled_wu)
-    """
+  
     turn_to(game, heading_deg)
     r = get_pose(game)
     if r is None:
@@ -466,10 +383,7 @@ def drive_to_max(game, heading_deg, all_nodes, max_ticks=8000):
                           f"  L={left_d:.0f} R={right_d:.0f} fwd={fwd_d:.0f} — stopping")
                     return side_stops, (px, py), 'ROOM_CENTER', travelled
 
-            # ── Side corridor: EITHER side open — no ratio gate ───────────
-            # Ratio gate removed: when forward is also open the ratio never
-            # triggers, causing entire rooms on the side to be missed.
-            side_open = (left_d > SIDE_OPEN_DEPTH) or (right_d > SIDE_OPEN_DEPTH)
+          
             if side_open and not any(
                 dist2(px, py, n.x, n.y) < REVISIT_RADIUS for n in all_nodes
             ):
@@ -613,14 +527,7 @@ def explore(game, goal_pos):
             break
         nx, ny = r[0], r[1]
 
-        # ── Build node chain: [side checkpoints] → terminal ────────────────
-        #
-        # Checkpoints are unscanned; they are pushed BELOW terminal on the
-        # DFS stack so the terminal is explored first.  When the terminal is
-        # exhausted and popped, DFS backtracks to each checkpoint in order,
-        # navigates there, scans lazily, and explores.  The parent chain is:
-        #   current → ckpt_1 → ckpt_2 → ... → terminal
-        # A* can route through this chain for backtracking.
+   
 
         chain_parent = current
         new_chain    = []
